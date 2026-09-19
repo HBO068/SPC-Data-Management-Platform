@@ -247,7 +247,6 @@ function setWeekOptions(prefix){const year=$(prefix+"Year")?.value||"",month=$(p
 function complete(v){const fs=CFG[v.terminal]||[],vals=state.timelines[v.id]?.values||state.timelines[v.id]||{};return fs.length?Math.round(fs.filter(f=>String(vals[f[0]]??"").trim()).length/fs.length*100):0}
 function timelineValues(v){return state.timelines[v.id]?.values||state.timelines[v.id]||{}} function timelineMeta(v){return state.timelines[v.id]?.meta||{}} function started(v){return complete(v)>0}
 function ruleDoc(t){return state.rules[t]||null}
-function milestoneRule(t,field){return (ruleDoc(t)?.milestones||[]).find(r=>r.field===field)||null}
 function ruleDependencies(r){if(Array.isArray(r?.previousFields)&&r.previousFields.length)return r.previousFields.filter(Boolean);return r?.previousField?[r.previousField]:[]}
 const FIELD_ALIASES={
  "Planning Concluded":["Planning Concluded (Pre-Plan Sent)"],
