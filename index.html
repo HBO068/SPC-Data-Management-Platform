@@ -3,10 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SPC Data Management Platform — SEGOT / DKAAR / ITVAD / NGAPP / LRMLW Pilot v19</title>
+<title>SPC Data Management Platform — v20</title>
 <style>
 :root{--bg:#07121f;--panel:#0a1c2e;--line:#27435e;--line2:#365a78;--text:#f3f8fc;--muted:#91a9bd;--cyan:#25d7ff;--green:#32d483;--amber:#ffb020;--red:#ff5b63}
 *{box-sizing:border-box} body{margin:0;background:#07121f;color:var(--text);font-family:Segoe UI,Arial,sans-serif} button,input,select,textarea{font:inherit} button{cursor:pointer}
+.loadingoverlay{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;background:rgba(3,11,18,.78);backdrop-filter:blur(3px)}.loadingbox{min-width:260px;max-width:90vw;padding:18px 22px;border:1px solid var(--line2);border-radius:12px;background:#091b2e;text-align:center;box-shadow:0 18px 50px #0008}.loadingbox b{display:block;color:var(--cyan);margin-bottom:6px}.loadingbox span{font-size:11px;color:var(--muted)}
 .hidden{display:none!important} .login{min-height:100vh;display:grid;place-items:center;padding:20px;background:radial-gradient(circle at 50% 15%,#12334e 0,#07121f 40%,#05101a 100%)} .loginbox{width:min(430px,100%);background:#091b2e;border:1px solid var(--line2);border-radius:14px;padding:24px}
 .loginbox h1{margin:0 0 5px;font-size:22px} .loginbox p{margin:0 0 18px;color:var(--muted);font-size:12px} .field{margin:10px 0} .field label{display:block;font-size:10px;color:var(--muted);text-transform:uppercase;margin-bottom:5px}
 input,select,textarea{background:#071827;border:1px solid var(--line2);color:var(--text);border-radius:7px;padding:9px 10px} .login input{width:100%}
@@ -64,14 +65,17 @@ body.light .suprow td{background-color:rgba(255,255,255,.94)}
 </style>
 </head>
 <body>
+<div id="loadingOverlay" class="loadingoverlay hidden"><div class="loadingbox"><b>Loading SPC data…</b><span id="loadingText">Please wait.</span></div></div>
 <section id="loginView" class="login"><div class="loginbox"><h1>SPC Data Management Platform</h1><p>Administrator access</p><form id="loginForm"><div class="field"><label>Email</label><input id="email" type="email" required></div><div class="field"><label>Password</label><input id="password" type="password" required></div><button class="btn primary" style="width:100%" type="submit">Sign in</button><div id="loginMsg" class="msg">Use the Firebase admin user.</div></form></div></section>
 
 <div id="appView" class="hidden">
-<header class="top"><div class="logo">SPC</div><div class="brand"><h1>DATA MANAGEMENT PLATFORM</h1><span>Timeline database • Dashboard database • Firestore • SEGOT / DKAAR / ITVAD / NGAPP / LRMLW Pilot v19</span></div><div class="userbox"><span class="dbdot"></span><small id="currentUser"></small><button id="themeToggle" class="btn" type="button">☀ Light Mode</button><button id="logout" class="btn">Sign out</button></div></header>
+<header class="top"><div class="logo">SPC</div><div class="brand"><h1>DATA MANAGEMENT PLATFORM</h1><span>Timeline database • Dashboard database • Firestore • v20</span></div><div class="userbox"><span class="dbdot"></span><small id="currentUser"></small><button id="themeToggle" class="btn" type="button">☀ Light Mode</button><button id="logout" class="btn">Sign out</button></div></header>
 <div class="shell">
 <aside class="side">
 <div class="navlabel">Data Control</div>
 <button class="nav active" data-page="dashboard">▦ Data Control Dashboard</button>
+<button class="nav" data-page="register">☷ Vessel Register</button>
+<button class="nav" data-page="quality">◇ Data Quality</button>
 <button class="nav" data-page="historical">⇧ Historical Migration (Timelines)</button>
 <button class="nav" data-page="sync">↻ Berth Plan Sync</button>
 <button class="nav" data-page="dashboardhistory">⇧ Historical Migration (Dashboards)</button>
@@ -404,16 +408,25 @@ function refreshFilterOptions(){
 }
 function matchPeriod(v,year,month,week){const p=dateParts(v.etb);if(year&&p.year!==String(year))return false;if(week)return p.week===String(week);if(month&&p.month!==String(month))return false;return true}
 async function loadAll(){
- const vs=await getDocs(collection(db,"vessels"));state.vessels=vs.docs.map(d=>({id:d.id,...d.data()}));
- const ts=await getDocs(collection(db,"timelines"));state.timelines={};ts.docs.forEach(d=>state.timelines[d.id]=d.data());
- try{const aq=query(collection(db,"audit"),orderBy("when","desc"),limit(1500));const as=await getDocs(aq);state.audit=as.docs.map(d=>({id:d.id,...d.data()}))}catch{const as=await getDocs(collection(db,"audit"));state.audit=as.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>String(b.when).localeCompare(String(a.when)))}
- const ds=await getDocs(collection(db,"dashboardData"));state.dashboardData=ds.docs.map(d=>({id:d.id,...d.data()}));
- try{const rs=await getDocs(collection(db,"timelineRules"));state.rules={};rs.docs.forEach(d=>state.rules[d.id]=d.data())}catch{state.rules={}}
- try{const rr=await getDocs(collection(db,"roles"));state.roles=rr.docs.map(d=>({id:d.id,...d.data()}))}catch{state.roles=[]}
- refreshFilterOptions();renderAll();
+ setLoading(true,"Loading vessels, timelines and dashboard data…");
+ try{
+  const auditPromise=(async()=>{try{return await getDocs(query(collection(db,"audit"),orderBy("when","desc"),limit(1500)))}catch{return await getDocs(collection(db,"audit"))}})();
+  const safeRules=getDocs(collection(db,"timelineRules")).catch(()=>null),safeRoles=getDocs(collection(db,"roles")).catch(()=>null);
+  const [vs,ts,as,ds,rs,rr]=await Promise.all([getDocs(collection(db,"vessels")),getDocs(collection(db,"timelines")),auditPromise,getDocs(collection(db,"dashboardData")),safeRules,safeRoles]);
+  state.vessels=vs.docs.map(d=>({id:d.id,...d.data()}));
+  state.timelines={};ts.docs.forEach(d=>state.timelines[d.id]=d.data());
+  state.audit=as.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>String(b.when).localeCompare(String(a.when))).slice(0,1500);
+  state.dashboardData=ds.docs.map(d=>({id:d.id,...d.data()}));
+  state.rules={};if(rs)rs.docs.forEach(d=>state.rules[d.id]=d.data());
+  state.roles=rr?rr.docs.map(d=>({id:d.id,...d.data()})):[];
+  refreshFilterOptions();renderAll();
+ }catch(err){console.error(err);alert("SPC data could not be loaded. Please check the connection and refresh.\n\n"+(err?.message||err));throw err}
+ finally{setLoading(false)}
 }
 async function writeAudit(events){for(let i=0;i<events.length;i+=400){const b=writeBatch(db);events.slice(i,i+400).forEach((a,j)=>b.set(doc(db,"audit",`${Date.now()}-${i+j}-${Math.random().toString(36).slice(2,7)}`),a));await b.commit()}}
-function renderAll(){renderDashboard();renderRegister();renderAudit();renderQuality();refreshTl();renderSupervisor();renderWeekly();renderRules();renderRoles();}
+function setLoading(on,message="Please wait."){const box=$("loadingOverlay"),label=$("loadingText");if(label)label.textContent=message;if(box)box.classList.toggle("hidden",!on)}
+function renderPage(id){if(id==="dashboard")renderDashboard();else if(id==="register")renderRegister();else if(id==="audit")renderAudit();else if(id==="quality")renderQuality();else if(id==="timeline")refreshTl();else if(id==="supervisor")renderSupervisor();else if(id==="weekly"){updateWeeklyVessels();renderWeekly()}else if(id==="rules")renderRules();else if(id==="roles")renderRoles()}
+function renderAll(){renderPage(document.querySelector(".page.active")?.id||"dashboard")}
 function dashboardScope(){return state.vessels.filter(v=>(!$("dbTerminal").value||v.terminal===$("dbTerminal").value)&&matchPeriod(v,$("dbYear").value,$("dbMonth").value,$("dbWeek").value))}
 function renderDashboard(){
  const arr=dashboardScope();$("kScope").textContent=arr.length;$("kUpdated").textContent=arr.filter(started).length;$("kNotStarted").textContent=arr.filter(v=>!started(v)).length;$("kIncomplete").textContent=arr.filter(v=>started(v)&&complete(v)<100).length;
@@ -491,11 +504,12 @@ function renderRoles(){if(!$("rolesBody"))return;$("rolesBody").innerHTML=(state
 async function saveRole(){try{const email=$("roleEmail").value.trim().toLowerCase();if(!email)throw Error("Enter a user email.");const now=new Date().toISOString(),id=stableId(email),payload={email,role:$("roleName").value,terminal:$("roleTerminal").value,updatedAt:now,updatedBy:currentEmail};await setDoc(doc(db,"roles",id),payload,{merge:true});await writeAudit([{when:now,user:currentEmail,action:"ROLE REGISTRY UPDATE",vessel:email,field:"Role",old:"",new:payload.role+(payload.terminal?` / ${payload.terminal}`:"")}]);$("roleMsg").className="msg ok";$("roleMsg").textContent=`Role saved for ${email}.`;await loadAll();renderRoles()}catch(e){$("roleMsg").className="msg err";$("roleMsg").textContent=e.message}}
 function applyTheme(theme){const light=theme==="light";document.body.classList.toggle("light",light);localStorage.setItem("spcDataTheme",light?"light":"dark");if($("themeToggle"))$("themeToggle").textContent=light?"☾ Dark Mode":"☀ Light Mode"}
 function initTheme(){applyTheme(localStorage.getItem("spcDataTheme")||"dark");if($("themeToggle"))$("themeToggle").onclick=()=>applyTheme(document.body.classList.contains("light")?"dark":"light")}
-function show(id){document.querySelectorAll(".page").forEach(p=>p.classList.toggle("active",p.id===id));document.querySelectorAll(".nav").forEach(b=>b.classList.toggle("active",b.dataset.page===id));if(id==="register")renderRegister();if(id==="audit")renderAudit();if(id==="quality")renderQuality();if(id==="dashboard")renderDashboard();if(id==="supervisor")renderSupervisor();if(id==="weekly")renderWeekly();if(id==="rules")renderRules();if(id==="roles")renderRoles()}
-document.querySelectorAll(".nav").forEach(b=>b.onclick=()=>show(b.dataset.page));document.querySelectorAll(".tabbtn").forEach(b=>b.onclick=()=>{document.querySelectorAll(".tabbtn").forEach(x=>x.classList.toggle("active",x===b));document.querySelectorAll(".tabpane").forEach(x=>x.classList.toggle("active",x.id===b.dataset.tab))});
-["regTerminal","regYear","regMonth","regWeek"].forEach(id=>$(id).onchange=renderRegister);$("regSearch").oninput=renderRegister;$("refreshRegister").onclick=renderRegister;["dbYear","dbMonth","dbWeek","dbTerminal"].forEach(id=>$(id).onchange=renderDashboard);$("refreshDash").onclick=renderDashboard;if($("exportControl"))$("exportControl").onclick=exportControlExcel;["tlTerminal","tlYear","tlMonth"].forEach(id=>$(id).onchange=()=>{setWeekOptions("tl");refreshTl()});$("tlWeek").onchange=refreshTl;$("tlSearch").oninput=refreshTl;if($("refreshTlBtn"))$("refreshTlBtn").onclick=refreshTl;["supTerminal","supYear","supMonth"].forEach(id=>$(id).onchange=()=>{setWeekOptions("sup");renderSupervisor()});["supWeek","supStatus"].forEach(id=>$(id).onchange=renderSupervisor);if($("refreshSup"))$("refreshSup").onclick=renderSupervisor;if($("closeSupDetail"))$("closeSupDetail").onclick=()=>$("supDetail").classList.add("hidden");["wkTerminal","wkYear","wkMonth"].forEach(id=>$(id).onchange=()=>{setWeekOptions("wk");updateWeeklyVessels();renderWeekly()});$("wkWeek").onchange=()=>{updateWeeklyVessels();renderWeekly()};$("wkVessel").onchange=renderWeekly;$("refreshWeekly").onclick=()=>{updateWeeklyVessels();renderWeekly()};$("printWeekly").onclick=()=>window.print();$("saveDashManual").onclick=saveDashboardManual;$("saveRole").onclick=saveRole;$("refreshRoles").onclick=renderRoles;
+function show(id,recordHistory=true){if(!document.getElementById(id)?.classList.contains("page"))id="dashboard";document.querySelectorAll(".page").forEach(p=>p.classList.toggle("active",p.id===id));document.querySelectorAll(".nav").forEach(b=>b.classList.toggle("active",b.dataset.page===id));if(recordHistory&&location.hash!==`#${id}`)history.pushState({page:id},"",`#${id}`);renderPage(id);window.scrollTo({top:0,behavior:"auto"})}
+const debounce=(fn,wait=180)=>{let timer;return(...args)=>{clearTimeout(timer);timer=setTimeout(()=>fn(...args),wait)}};
+document.querySelectorAll(".nav").forEach(b=>b.onclick=()=>show(b.dataset.page));window.addEventListener("popstate",()=>show(location.hash.slice(1)||"dashboard",false));document.querySelectorAll(".tabbtn").forEach(b=>b.onclick=()=>{document.querySelectorAll(".tabbtn").forEach(x=>x.classList.toggle("active",x===b));document.querySelectorAll(".tabpane").forEach(x=>x.classList.toggle("active",x.id===b.dataset.tab))});
+["regTerminal","regYear","regMonth","regWeek"].forEach(id=>$(id).onchange=renderRegister);$("regSearch").oninput=debounce(renderRegister);$("refreshRegister").onclick=renderRegister;["dbYear","dbMonth","dbWeek","dbTerminal"].forEach(id=>$(id).onchange=renderDashboard);$("refreshDash").onclick=renderDashboard;if($("exportControl"))$("exportControl").onclick=exportControlExcel;["tlTerminal","tlYear","tlMonth"].forEach(id=>$(id).onchange=()=>{setWeekOptions("tl");refreshTl()});$("tlWeek").onchange=refreshTl;$("tlSearch").oninput=debounce(refreshTl);if($("refreshTlBtn"))$("refreshTlBtn").onclick=refreshTl;["supTerminal","supYear","supMonth"].forEach(id=>$(id).onchange=()=>{setWeekOptions("sup");renderSupervisor()});["supWeek","supStatus"].forEach(id=>$(id).onchange=renderSupervisor);if($("refreshSup"))$("refreshSup").onclick=renderSupervisor;if($("closeSupDetail"))$("closeSupDetail").onclick=()=>$("supDetail").classList.add("hidden");["wkTerminal","wkYear","wkMonth"].forEach(id=>$(id).onchange=()=>{setWeekOptions("wk");updateWeeklyVessels();renderWeekly()});$("wkWeek").onchange=()=>{updateWeeklyVessels();renderWeekly()};$("wkVessel").onchange=renderWeekly;$("refreshWeekly").onclick=()=>{updateWeeklyVessels();renderWeekly()};$("printWeekly").onclick=()=>window.print();$("saveDashManual").onclick=saveDashboardManual;$("saveRole").onclick=saveRole;$("refreshRoles").onclick=renderRoles;
 function initStatic(){initTheme();["regTerminal","syncTerminal","tlTerminal","dbTerminal","cleanTerminal","supTerminal","wkTerminal"].forEach(id=>{if($(id))fillSelect(id,TERMINALS,(id==="tlTerminal"||id==="cleanTerminal"||id==="wkTerminal")?"Select Terminal":"All Terminals")})}
 $("loginForm").onsubmit=async e=>{e.preventDefault();$("loginMsg").textContent="Signing in...";try{await signInWithEmailAndPassword(auth,$("email").value,$("password").value)}catch(err){$("loginMsg").className="msg err";$("loginMsg").textContent=err.message}};$("logout").onclick=()=>signOut(auth);
-onAuthStateChanged(auth,async user=>{if(user){currentEmail=user.email||"";$("currentUser").textContent=currentEmail;$("loginView").classList.add("hidden");$("appView").classList.remove("hidden");initStatic();await loadAll()}else{$("appView").classList.add("hidden");$("loginView").classList.remove("hidden")}});
+onAuthStateChanged(auth,async user=>{if(user){currentEmail=user.email||"";$("currentUser").textContent=currentEmail;$("loginView").classList.add("hidden");$("appView").classList.remove("hidden");initStatic();const requested=location.hash.slice(1),initial=document.getElementById(requested)?.classList.contains("page")?requested:"dashboard";document.querySelectorAll(".page").forEach(p=>p.classList.toggle("active",p.id===initial));document.querySelectorAll(".nav").forEach(b=>b.classList.toggle("active",b.dataset.page===initial));history.replaceState({page:initial},"",`#${initial}`);await loadAll()}else{$("appView").classList.add("hidden");$("loginView").classList.remove("hidden")}});
 </script>
 </body></html>
