@@ -157,7 +157,7 @@ body.light .suprow td{background-color:rgba(255,255,255,.94)}
 
 
 <section id="supervisor" class="page">
-<div class="head"><div><h2>Supervisor’s Control</h2><p>Review unchecked vessels together, then record who checked each vessel and when.</p></div></div><div class="unlockallbar"><button id="unlockAllFiltered" class="btn red hidden">Unlock All Filtered</button></div>
+<div class="head"><div><h2>Supervisor’s Control</h2><p>Review unchecked vessels together, then record who checked each vessel and when.</p></div><button id="exportSupervisorIssues" class="btn amber">Export Issues</button></div><div class="unlockallbar"><button id="unlockAllFiltered" class="btn red hidden">Unlock All Filtered</button></div>
 <div class="card"><div class="pb"><div class="toolbar"><select id="supTerminal"><option value="">All Terminals</option></select><span id="supTerminalTime" class="badge bgray hidden"></span><select id="supYear"><option value="">All Years</option></select><select id="supMonth"><option value="">All Months</option></select><select id="supWeek"><option value="">All Week Filters</option></select><select id="supStatus"><option value="unchecked">Unchecked Only</option><option value="checked">Checked Only</option><option value="">All</option></select></div></div></div>
 <div class="grid kpis panel"><div class="card kpi"><small>Total</small><div id="supTotal" class="num cyan">0</div></div><div class="card kpi"><small>Checked</small><div id="supChecked" class="num green">0</div></div><div class="card kpi"><small>Unchecked</small><div id="supUnchecked" class="num amber">0</div></div><div class="card kpi"><small>With Data Errors</small><div id="supErrors" class="num red">0</div></div><div class="card kpi"><small>Special Calls</small><div id="supDisch" class="num">0</div></div></div>
 <div class="card panel"><div class="pb"><div class="tablewrap"><table><thead><tr><th>Checked</th><th>Terminal</th><th>Week Filter</th><th>Visit</th><th>Vessel</th><th>ETB</th><th>Timeline</th><th>Errors</th><th>Checked By / At</th><th>Open</th></tr></thead><tbody id="supBody"></tbody></table></div></div></div>
@@ -519,6 +519,7 @@ function renderAudit(){
 function renderQuality(){const k={};state.vessels.forEach(v=>k[keyOf(v)]=(k[keyOf(v)]||0)+1);$("qE").textContent=state.vessels.filter(v=>!v.etb).length;$("qV").textContent=state.vessels.filter(v=>!v.visit).length;$("qN").textContent=state.vessels.filter(v=>!v.name).length;$("qD").textContent=Object.values(k).filter(x=>x>1).length;$("qB").textContent=state.vessels.filter(v=>!started(v)).length}
 
 let XLSX=null;async function xlsx(){if(XLSX)return XLSX;XLSX=await import("https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm");return XLSX}
+let XLSX_STYLE=null;async function xlsxStyled(){if(XLSX_STYLE)return XLSX_STYLE;XLSX_STYLE=await import("https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/+esm");return XLSX_STYLE}
 function norm(s){return cleanText(s).toLowerCase().replace(/[^a-z0-9]/g,"")} function idx(h,names){for(const n of names){const i=h.findIndex(x=>norm(x)===norm(n));if(i>=0)return i}for(const n of names){const nn=norm(n),i=h.findIndex(x=>norm(x).includes(nn)||nn.includes(norm(x)));if(i>=0)return i}return -1}
 function ed(v,X){if(v instanceof Date){const d=new Date(v);d.setMinutes(d.getMinutes()-d.getTimezoneOffset());return d.toISOString().slice(0,16)}if(typeof v==="number"&&X.SSF?.parse_date_code){const z=X.SSF.parse_date_code(v);if(z)return `${z.y}-${String(z.m).padStart(2,"0")}-${String(z.d).padStart(2,"0")}T${String(z.H||0).padStart(2,"0")}:${String(z.M||0).padStart(2,"0")}`}const d=new Date(v);if(!Number.isNaN(d.getTime())){d.setMinutes(d.getMinutes()-d.getTimezoneOffset());return d.toISOString().slice(0,16)}return cleanText(v)}
 
@@ -536,6 +537,60 @@ $("applySync").onclick=async()=>{let events=[];for(let i=0;i<syncCompare.length;
 
 async function unlockCheckedVessel(v){if(!canUnlockChecked()){alert("Only Admin can unlock a Supervisor-checked vessel.");return}const td=state.timelines[v.id]||{};if(!td.supervisorChecked){alert("This vessel is not locked.");return}const inSup=document.getElementById("supervisor")?.classList.contains("active"),keep=inSup?supervisorViewState():null,detailOpen=inSup&&!$("supDetail").classList.contains("hidden");const now=new Date().toISOString();await setDoc(doc(db,"timelines",v.id),{supervisorChecked:false,supervisorCheckedBy:"",supervisorCheckedAt:"",unlockedAt:now,unlockedBy:currentEmail,updatedAt:now},{merge:true});await writeAudit([{when:now,user:currentEmail,action:"VESSEL UNLOCKED",vessel:`${v.terminal} / ${v.visit} / ${v.name}`,field:"Supervisor Checked",old:true,new:"Unlocked by Admin for correction"}]);if(keep)await reloadPreservingSupervisor(keep);else await loadAll();if($("timelineEditorPanel")&&!$("timelineEditorPanel").classList.contains("hidden"))openTimelineVessel(v.id);if(detailOpen){const refreshed=state.vessels.find(x=>x.id===v.id);if(refreshed)openSupervisorVessel(refreshed)}}
 function turnaroundErrorState(v){const td=state.timelines[v.id]||{},vals=timelineValues(v),m=calcMetrics(v,vals,!!td.dischCall,!!td.handledByTerminal),value=m.planningTurnaroundTime,flagged=Number.isFinite(value)&&(value<0||value>24),rounded=flagged?Number(value.toFixed(2)):null,stored=Number(td.turnaroundPossibleErrorConfirmedValue??td.turnaroundNegativeConfirmedValue),legacyConfirmed=td.turnaroundNegativeConfirmed===true,genericConfirmed=td.turnaroundPossibleErrorConfirmed===true,confirmed=flagged&&(genericConfirmed||legacyConfirmed)&&Number.isFinite(stored)&&Math.abs(stored-rounded)<0.005,reason=Number.isFinite(value)?(value<0?"below 0 h":value>24?"above 24 h":""):"";return{flagged,value,rounded,confirmed,reason}}
+
+function supervisorSpecialTags(v,td){const a=[];if(td?.dischCall)a.push("Disch Call");if(td?.handledByTerminal)a.push("Handled By Terminal");if(isShortsteaming(v,td))a.push("Shortsteaming");return a.join(", ")}
+function ruleExpectedText(v,field,kind){const r=milestoneRule(v.terminal,field);if(!r)return"";if(kind==="ETB"){const h=Number(r.targetHours);return Number.isFinite(h)?`≤ ETB - ${h} h`:"ETB rule"}const deps=ruleDependencies(r),mode=String(r.dependencyMode||"SINGLE").toUpperCase(),off=Number(r.dependencyOffsetHours),expr=deps.length===1?deps[0]:deps.length?`${mode}(${deps.join(", ")})`:"Dependency";return Number.isFinite(off)?`After ${expr} and ≤ ${off} h after ${expr}`:`After ${expr}`}
+function collectSupervisorIssues(){
+ const rows=[];
+ const add=(v,type,milestone,expected,actual,detail,severity,td)=>rows.push({
+  "Severity":severity,
+  "Terminal":v.terminal||"",
+  "Week Filter":dateParts(v.etb).week||"",
+  "Vessel Visit":v.visit||"",
+  "Vessel Name":v.name||"",
+  "ETB":human(v.etb),
+  "Issue Type":type,
+  "Milestone":milestone||"",
+  "Rule / Expected":expected||"",
+  "Actual Value":actual||"",
+  "Error Detail":detail||"",
+  "Supervisor Status":td?.supervisorChecked?"Checked":"Unchecked",
+  "Special Tags":supervisorSpecialTags(v,td)
+ });
+ supScope().forEach(v=>{
+  const td=state.timelines[v.id]||{},vals=timelineValues(v),special=!!td.dischCall||!!td.handledByTerminal;
+  const hist=td.hasValidationErrors?(td.validationErrors||[]):[];
+  hist.forEach(e=>add(v,"Historical Validation Error",e.field||"",e.previousField||e.previous||"",vals[e.field]||"",e.message||String(e),"RED",td));
+  validateSequence(v,vals,{special,shortsteaming:isShortsteaming(v,td)}).forEach(e=>add(v,"Sequence Error",e.field||"",e.previous||"",vals[e.field]||"",e.message||"Sequence error","RED",td));
+  requiredForSupervisor(v).forEach(f=>add(v,"Missing Required Field",f,"Required before Supervisor Check","",`${f} is missing.`,"GREY",td));
+  const ptt=turnaroundErrorState(v);
+  if(ptt.flagged)add(v,"Planning Turnaround Possible Error","Planning Turnaround Time","0 h to 24 h",Number.isFinite(ptt.value)?`${ptt.value.toFixed(2)} h`:"",ptt.confirmed?`Possible error confirmed by Supervisor/Admin (${ptt.reason}).`:`Possible error not confirmed (${ptt.reason}).`,ptt.confirmed?"YELLOW":"RED",td);
+  (CFG[v.terminal]||[]).filter(f=>f[1]==="timestamp").forEach(([field])=>{
+   const raw=vals[field],r=milestoneRule(v.terminal,field);
+   if(!raw||!r)return;
+   const st=eventRuleState(v,field,raw);
+   if(st.etb===false)add(v,st.status==="mixed"?"Mixed Rule Result":"ETB Rule Miss",field,ruleExpectedText(v,field,"ETB"),human(raw),st.status==="mixed"?"Dependency rule respected, ETB rule missed.":"ETB-based target missed.",st.status==="mixed"?"YELLOW":"RED",td);
+   if(st.dependency===false)add(v,st.status==="mixed"?"Mixed Rule Result":"Dependency Rule Miss",field,ruleExpectedText(v,field,"DEP"),human(raw),st.status==="mixed"?"ETB rule respected, dependency rule missed.":"Dependency target/sequence missed.",st.status==="mixed"?"YELLOW":"RED",td);
+  });
+  if(!td.supervisorChecked)add(v,"Supervisor Status","","Vessel to be reviewed","","Vessel is still unchecked.","GREY",td);
+ });
+ return rows
+}
+async function exportSupervisorIssuesExcel(){
+ const rows=collectSupervisorIssues();
+ if(!rows.length){alert("No issues found in the current Supervisor Control filters.");return}
+ const X=await xlsxStyled(),ws=X.utils.json_to_sheet(rows),wb=X.utils.book_new(),range=X.utils.decode_range(ws["!ref"]);
+ const fills={RED:"F4CCCC",YELLOW:"FFF2CC",GREY:"E7E6E6"};
+ const headerFill="17365D";
+ for(let C=range.s.c;C<=range.e.c;C++){const cell=ws[X.utils.encode_cell({r:0,c:C})];if(cell)cell.s={fill:{fgColor:{rgb:headerFill}},font:{bold:true,color:{rgb:"FFFFFF"}},alignment:{vertical:"center"}}}
+ for(let R=1;R<=range.e.r;R++){const sev=String(ws[X.utils.encode_cell({r:R,c:0})]?.v||"").toUpperCase(),fill=fills[sev]||"FFFFFF";for(let C=range.s.c;C<=range.e.c;C++){const cell=ws[X.utils.encode_cell({r:R,c:C})];if(cell)cell.s={fill:{fgColor:{rgb:fill}},alignment:{vertical:"top",wrapText:true}}}}
+ ws["!autofilter"]={ref:ws["!ref"]};
+ ws["!cols"]=[{wch:10},{wch:11},{wch:13},{wch:15},{wch:24},{wch:20},{wch:28},{wch:30},{wch:38},{wch:22},{wch:55},{wch:18},{wch:26}];
+ X.utils.book_append_sheet(wb,ws,"Supervisor Issues");
+ const scope=[$("supTerminal")?.value||"All-Terminals",$("supYear")?.value||"All-Years",$("supMonth")?.value?`M${$("supMonth").value}`:"",$("supWeek")?.value||"",$("supStatus")?.value||"All-Status"].filter(Boolean).join("_");
+ X.writeFile(wb,`SPC_Supervisor_Issues_${scope}.xlsx`);
+}
+
 function supervisorViewState(){const wrap=$("supBody")?.closest(".tablewrap");return{terminal:$("supTerminal")?.value||"",year:$("supYear")?.value||"",month:$("supMonth")?.value||"",week:$("supWeek")?.value||"",status:$("supStatus")?.value||"",scrollTop:wrap?wrap.scrollTop:0,pageY:window.scrollY}}
 function restoreSupervisorViewState(x){if(!x)return;const setIf=(id,val)=>{const el=$(id);if(el&&[...el.options].some(o=>o.value===val))el.value=val};setIf("supTerminal",x.terminal);setIf("supYear",x.year);setIf("supMonth",x.month);setWeekOptions("sup");setIf("supWeek",x.week);setIf("supStatus",x.status);renderSupervisor();requestAnimationFrame(()=>{const wrap=$("supBody")?.closest(".tablewrap");if(wrap)wrap.scrollTop=x.scrollTop||0;window.scrollTo(0,x.pageY||0)})}
 async function reloadPreservingSupervisor(x){await loadAll();restoreSupervisorViewState(x)}
@@ -568,7 +623,7 @@ function initTheme(){applyTheme(localStorage.getItem("spcDataTheme")||"dark");if
 function show(id,recordHistory=true){if(!document.getElementById(id)?.classList.contains("page"))id="dashboard";applyRoleNavigation();const nav=document.querySelector(`.nav[data-page="${id}"]`);if(nav?.classList.contains("rolehidden"))id=accessRole()==="supervisor"?"supervisor":"dashboard";document.querySelectorAll(".page").forEach(p=>p.classList.toggle("active",p.id===id));document.querySelectorAll(".nav").forEach(b=>b.classList.toggle("active",b.dataset.page===id));if(recordHistory&&location.hash!==`#${id}`)history.pushState({page:id},"",`#${id}`);renderPage(id);window.scrollTo({top:0,behavior:"auto"})}
 const debounce=(fn,wait=180)=>{let timer;return(...args)=>{clearTimeout(timer);timer=setTimeout(()=>fn(...args),wait)}};
 document.querySelectorAll(".nav").forEach(b=>b.onclick=()=>show(b.dataset.page));window.addEventListener("popstate",()=>show(location.hash.slice(1)||"dashboard",false));document.querySelectorAll(".tabbtn").forEach(b=>b.onclick=()=>{document.querySelectorAll(".tabbtn").forEach(x=>x.classList.toggle("active",x===b));document.querySelectorAll(".tabpane").forEach(x=>x.classList.toggle("active",x.id===b.dataset.tab))});
-["regTerminal","regYear","regMonth","regWeek"].forEach(id=>$(id).onchange=renderRegister);$("regSearch").oninput=debounce(renderRegister);$("refreshRegister").onclick=renderRegister;["dbYear","dbMonth","dbWeek","dbTerminal"].forEach(id=>$(id).onchange=renderDashboard);$("refreshDash").onclick=renderDashboard;if($("exportControl"))$("exportControl").onclick=exportControlExcel;["tlTerminal","tlYear","tlMonth"].forEach(id=>$(id).onchange=()=>{setWeekOptions("tl");refreshTl()});$("tlWeek").onchange=refreshTl;$("tlSearch").oninput=debounce(refreshTl);if($("refreshTlBtn"))$("refreshTlBtn").onclick=refreshTl;["supTerminal","supYear","supMonth"].forEach(id=>$(id).onchange=()=>{setWeekOptions("sup");renderSupervisor()});["supWeek","supStatus"].forEach(id=>$(id).onchange=renderSupervisor);if($("refreshSup"))$("refreshSup").onclick=renderSupervisor;if($("closeSupDetail"))$("closeSupDetail").onclick=()=>$("supDetail").classList.add("hidden");["wkTerminal","wkYear","wkMonth"].forEach(id=>$(id).onchange=()=>{setWeekOptions("wk");updateWeeklyVessels();renderWeekly()});$("wkWeek").onchange=()=>{updateWeeklyVessels();renderWeekly()};$("wkVessel").onchange=renderWeekly;$("refreshWeekly").onclick=()=>{updateWeeklyVessels();renderWeekly()};$("printWeekly").onclick=()=>window.print();$("saveDashManual").onclick=saveDashboardManual;$("saveRole").onclick=saveRole;$("refreshRoles").onclick=renderRoles;if($("vsmTerminal"))$("vsmTerminal").onchange=renderVSM;if($("vsmShowInactive"))$("vsmShowInactive").onchange=renderVSM;
+["regTerminal","regYear","regMonth","regWeek"].forEach(id=>$(id).onchange=renderRegister);$("regSearch").oninput=debounce(renderRegister);$("refreshRegister").onclick=renderRegister;["dbYear","dbMonth","dbWeek","dbTerminal"].forEach(id=>$(id).onchange=renderDashboard);$("refreshDash").onclick=renderDashboard;if($("exportControl"))$("exportControl").onclick=exportControlExcel;["tlTerminal","tlYear","tlMonth"].forEach(id=>$(id).onchange=()=>{setWeekOptions("tl");refreshTl()});$("tlWeek").onchange=refreshTl;$("tlSearch").oninput=debounce(refreshTl);if($("refreshTlBtn"))$("refreshTlBtn").onclick=refreshTl;["supTerminal","supYear","supMonth"].forEach(id=>$(id).onchange=()=>{setWeekOptions("sup");renderSupervisor()});["supWeek","supStatus"].forEach(id=>$(id).onchange=renderSupervisor);if($("refreshSup"))$("refreshSup").onclick=renderSupervisor;if($("exportSupervisorIssues"))$("exportSupervisorIssues").onclick=exportSupervisorIssuesExcel;if($("closeSupDetail"))$("closeSupDetail").onclick=()=>$("supDetail").classList.add("hidden");["wkTerminal","wkYear","wkMonth"].forEach(id=>$(id).onchange=()=>{setWeekOptions("wk");updateWeeklyVessels();renderWeekly()});$("wkWeek").onchange=()=>{updateWeeklyVessels();renderWeekly()};$("wkVessel").onchange=renderWeekly;$("refreshWeekly").onclick=()=>{updateWeeklyVessels();renderWeekly()};$("printWeekly").onclick=()=>window.print();$("saveDashManual").onclick=saveDashboardManual;$("saveRole").onclick=saveRole;$("refreshRoles").onclick=renderRoles;if($("vsmTerminal"))$("vsmTerminal").onchange=renderVSM;if($("vsmShowInactive"))$("vsmShowInactive").onchange=renderVSM;
 function initStatic(){initTheme();["regTerminal","syncTerminal","tlTerminal","dbTerminal","cleanTerminal","supTerminal","wkTerminal","vsmTerminal"].forEach(id=>{if($(id))fillSelect(id,TERMINALS,(id==="tlTerminal"||id==="cleanTerminal"||id==="wkTerminal"||id==="vsmTerminal")?"Select Terminal":"All Terminals")});populateRoleSelectors()}
 $("loginForm").onsubmit=async e=>{e.preventDefault();$("loginMsg").textContent="Signing in...";try{await signInWithEmailAndPassword(auth,$("email").value,$("password").value)}catch(err){$("loginMsg").className="msg err";$("loginMsg").textContent=err.message}};$("logout").onclick=()=>signOut(auth);
 onAuthStateChanged(auth,async user=>{if(user){currentEmail=user.email||"";$("currentUser").textContent=currentEmail;$("loginView").classList.add("hidden");$("appView").classList.remove("hidden");initStatic();const requested=location.hash.slice(1),initial=document.getElementById(requested)?.classList.contains("page")?requested:"dashboard";document.querySelectorAll(".page").forEach(p=>p.classList.toggle("active",p.id===initial));document.querySelectorAll(".nav").forEach(b=>b.classList.toggle("active",b.dataset.page===initial));history.replaceState({page:initial},"",`#${initial}`);await loadAll()}else{$("appView").classList.add("hidden");$("loginView").classList.remove("hidden")}});
